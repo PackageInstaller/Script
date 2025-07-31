@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 import shutil
@@ -337,15 +338,10 @@ def find_bytes_files(root_path: Path) -> Tuple[str, List[Path]]:
             bytes_files = list(manifest_files_path.glob("*.bytes"))
             if bytes_files:
                 largest_file = max(bytes_files, key=lambda x: x.stat().st_size)
-                print(f"找到 ManifestFiles 目录: {manifest_files_path}")
-                print(f"找到{len(bytes_files)}个索引文件, 使用最大的: {largest_file.name}")
                 return "hotfix", [largest_file]
     
     bytes_files = list(root_path.rglob("*.bytes"))
     if bytes_files:
-        print(f"找到{len(bytes_files)}个索引文件")
-        for f in bytes_files:
-            print(f"{f.relative_to(root_path)}")
         return "apk", bytes_files
     
     return "none", []
@@ -364,109 +360,80 @@ def convert_bundle_name_to_path(bundle_name: str) -> str:
     return path
 
 
+def process_manifest_file(bytes_file: Path) -> Optional[PackageManifest]:
+    """读取并反序列化单个清单文件"""
+    try:
+        binary_data = bytes_file.read_bytes()
+        deserializer = YooAssetDeserializer(binary_data)
+        return deserializer.deserialize()
+    except Exception as e:
+        print(f"处理 {bytes_file.name} 时出错: {e}")
+        return None
+
+
 def extract_apk_assets(root_path: Path, bytes_files: List[Path], output_dir: Path):
     """提取安装包内资产"""
-    print(f"处理 APK 资产: {len(bytes_files)} 个清单文件")
-    
+
     apk_dir = output_dir / "Apk"
     apk_dir.mkdir(parents=True, exist_ok=True)
     
     all_bundles = {}
-    
     for bytes_file in bytes_files:
-        print(f"处理清单: {bytes_file.name}")
-        
-        try:
-            with open(bytes_file, 'rb') as f:
-                binary_data = f.read()
-            
-            deserializer = YooAssetDeserializer(binary_data)
-            manifest = deserializer.deserialize()
-            
-            print(f"版本: {manifest.file_version}")
-            print(f"包名: {manifest.package_name}")
-            print(f"资源包数量: {len(manifest.bundle_list)}")
-            
+        manifest = process_manifest_file(bytes_file)
+        if manifest:
+            print(f"{bytes_file.name}, 版本: {manifest.file_version}, 包名: {manifest.package_name}, Bundles: {len(manifest.bundle_list)}")
             for bundle in manifest.bundle_list:
                 all_bundles[bundle.file_hash] = bundle
-                
-        except Exception as e:
-            print(f"处理 {bytes_file.name} 时出错: {e}")
-            continue
     
     bundle_files_found = 0
-    
     for file_path in root_path.rglob("*"):
-        if file_path.is_file() and not file_path.suffix == '.bytes':
-            file_name = file_path.stem
+        if file_path.is_file() and file_path.stem in all_bundles:
+            bundle = all_bundles[file_path.stem]
+            target_path_str = convert_bundle_name_to_path(bundle.bundle_name)
             
-            if file_name in all_bundles:
-                bundle = all_bundles[file_name]
-                target_path = convert_bundle_name_to_path(bundle.bundle_name)
-                
-                if target_path:
-                    target_file = apk_dir / target_path
-                    target_file.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    try:
-                        shutil.copy2(file_path, target_file)
-                        bundle_files_found += 1
-                    except Exception as e:
-                        print(f"  复制 {file_path.name} 时出错: {e}")
+            if target_path_str:
+                target_file = apk_dir / target_path_str
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(file_path, target_file)
+                bundle_files_found += 1
     
-    print(f"APK 提取完成: {bundle_files_found} 个文件")
+    print(f"APK 提取完成: {bundle_files_found} 个文件被复制。")
 
 
 def extract_hotfix_assets(root_path: Path, bytes_file: Path, output_dir: Path):
     """提取热更资产"""
-    print(f"处理热更资产: {bytes_file.name}")
-    
     update_dir = output_dir / "Update"
     update_dir.mkdir(parents=True, exist_ok=True)
     
-    cache_bundle_files_path = root_path / "CacheBundleFiles"
-    if not cache_bundle_files_path.exists():
-        print(f"错误: CacheBundleFiles 目录未找到: {cache_bundle_files_path}")
+    cache_path = root_path / "CacheBundleFiles"
+    if not cache_path.is_dir():
+        print(f"错误: CacheBundleFiles 目录未找到: {cache_path}")
         return
+
+    manifest = process_manifest_file(bytes_file)
+    if not manifest:
+        return
+        
+    print(f"{bytes_file.name}, 版本: {manifest.file_version}, 包名: {manifest.package_name}, Bundles: {len(manifest.bundle_list)}")
     
-    try:
-        with open(bytes_file, 'rb') as f:
-            binary_data = f.read()
+    files_extracted = 0
+    for bundle in manifest.bundle_list:
+        file_hash = bundle.file_hash
+        if len(file_hash) < 2: continue
         
-        deserializer = YooAssetDeserializer(binary_data)
-        manifest = deserializer.deserialize()
-        
-        print(f"版本: {manifest.file_version}")
-        print(f"包名: {manifest.package_name}")
-        print(f"资源包数量: {len(manifest.bundle_list)}")
-        
-        files_extracted = 0
-        
-        for bundle in manifest.bundle_list:
-            file_hash = bundle.file_hash
-            if len(file_hash) < 2:
-                continue
+        source_file = cache_path / file_hash[:2] / file_hash / "__data"
+        if source_file.is_file():
+            target_path_str = convert_bundle_name_to_path(bundle.bundle_name)
+            if target_path_str:
+                target_file = update_dir / target_path_str
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_file, target_file)
+                files_extracted += 1
+        else:
+            print(f"缓存文件未找到: {source_file.relative_to(root_path)}")
             
-            cache_path = cache_bundle_files_path / file_hash[:2] / file_hash / "__data"
-            
-            if cache_path.exists():
-                target_path = convert_bundle_name_to_path(bundle.bundle_name)
-                if target_path:
-                    target_file = update_dir / target_path
-                    target_file.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    try:
-                        shutil.copy2(cache_path, target_file)
-                        files_extracted += 1
-                    except Exception as e:
-                        print(f"提取 {file_hash} 时出错: {e}")
-            else:
-                print(f"缓存文件未找到: {cache_path}")
-        
-        print(f"热更资产提取完成: {files_extracted} 个文件")
-        
-    except Exception as e:
-        print(f"处理热更清单时出错: {e}")
+    print(f"热更资产提取完成: {files_extracted} 个文件被提取。")
+
 
 
 def main():
