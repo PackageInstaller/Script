@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 import struct
 from dataclasses import dataclass, asdict
 MANIFEST_FILE_SIGN = 0x594F4F  # YOO
-SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.1", "2.3.10", "2.3.12"]
+SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.1", "2.3.12"]
 
 class BufferReader:
     """二进制数据读取器"""
@@ -178,11 +178,10 @@ class YooAssetDeserializer:
             self._deserialize_v152()
         elif self.version == "2.0.0":
             self._deserialize_v200()
-        elif self.version in ["2.3.1", "2.3.10", "2.3.12"]:
+        elif self.version in ["2.3.1", "2.3.12"]:
             self._deserialize_v2312()
         else:
             raise ValueError(f"不支持的版本: {self.version}")
-        
         return self.manifest
     
     def _deserialize_file_header(self):
@@ -193,7 +192,7 @@ class YooAssetDeserializer:
         
         file_version = self.buffer.read_utf8()
         if file_version not in SUPPORTED_VERSIONS:
-            # 如果清单文件版本不在支持列表，按最新的逻辑解析
+            # 按最新的逻辑解析
             pass
 
         self.version = file_version
@@ -281,7 +280,7 @@ class YooAssetDeserializer:
             self.manifest.bundle_list.append(bundle)
     
     def _deserialize_v2312(self):
-        """反序列化2.3.x版本的资源列表和Bundle列表 (兼容2.3.1, 2.3.10, 2.3.12)"""
+        """反序列化2.3.x版本的资源列表和Bundle列表 (兼容2.3.1, 2.3.12)"""
         asset_count = self.buffer.read_int32()
         self.manifest.asset_list = []
         
@@ -363,7 +362,7 @@ def extract_apk_assets(root_path: Path, bytes_files: List[Path], output_dir: Pat
             for bundle in manifest.bundle_list:
                 all_bundles[bundle.file_hash] = bundle
     
-    bundle_files_found = 0
+    bundle_files_count = 0
     for file_path in root_path.rglob("*"):
         if file_path.is_file() and file_path.stem in all_bundles:
             bundle = all_bundles[file_path.stem]
@@ -373,8 +372,8 @@ def extract_apk_assets(root_path: Path, bytes_files: List[Path], output_dir: Pat
                 target_file = apk_dir / target_path_str
                 target_file.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(file_path, target_file)
-                bundle_files_found += 1
-    print(f"总共提取了 {bundle_files_found} 个文件")
+                bundle_files_count += 1
+    print(f"总共提取了 {bundle_files_count} 个文件")
 
 def extract_hotfix_assets(root_path: Path, bytes_files: List[Path], output_dir: Path):
     update_dir = output_dir / "Update"
