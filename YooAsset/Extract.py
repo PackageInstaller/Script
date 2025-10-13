@@ -2,13 +2,14 @@ import io
 import os
 import sys
 import shutil
-import json
 from pathlib import Path
 from typing import List, Optional, Tuple
 import struct
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
+
+
 MANIFEST_FILE_SIGN = 0x594F4F  # YOO
-SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.1", "2.3.12"]
+SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.12"]
 
 class BufferReader:
     """二进制数据读取器"""
@@ -159,6 +160,7 @@ class PackageManifest:
         if self.bundle_list is None:
             self.bundle_list = []
 
+
 class YooAssetDeserializer:
     """YooAsset通用反序列化器"""
     
@@ -178,10 +180,11 @@ class YooAssetDeserializer:
             self._deserialize_v152()
         elif self.version == "2.0.0":
             self._deserialize_v200()
-        elif self.version in ["2.3.1", "2.3.12"]:
+        elif self.version == "2.3.12":
             self._deserialize_v2312()
         else:
             raise ValueError(f"不支持的版本: {self.version}")
+        
         return self.manifest
     
     def _deserialize_file_header(self):
@@ -192,9 +195,8 @@ class YooAssetDeserializer:
         
         file_version = self.buffer.read_utf8()
         if file_version not in SUPPORTED_VERSIONS:
-            # 按最新的逻辑解析
-            pass
-
+            raise ValueError(f"不支持的文件版本: {file_version}")
+        
         self.version = file_version
         
         self.manifest = PackageManifest()
@@ -205,14 +207,16 @@ class YooAssetDeserializer:
         self.manifest.output_name_style = self.buffer.read_int32()
         
         # 2.0.0+版本新增字段
-        if self.version.startswith("2."):
-            self.manifest.build_bundle_type = self.buffer.read_int32()
+        if self.version in ["2.0.0", "2.3.12"]:
+            if self.version == "2.3.12":
+                self.manifest.build_bundle_type = self.buffer.read_int32()
             self.manifest.build_pipeline = self.buffer.read_utf8()
         
         self.manifest.package_name = self.buffer.read_utf8()
         self.manifest.package_version = self.buffer.read_utf8()
         
-        if self.version.startswith("2."):
+        # 2.3.12版本新增PackageNote字段
+        if self.version == "2.3.12":
             self.manifest.package_note = self.buffer.read_utf8()
         
         if self.manifest.enable_addressable and self.manifest.location_to_lower:
@@ -280,7 +284,7 @@ class YooAssetDeserializer:
             self.manifest.bundle_list.append(bundle)
     
     def _deserialize_v2312(self):
-        """反序列化2.3.x版本的资源列表和Bundle列表 (兼容2.3.1, 2.3.12)"""
+        """反序列化2.3.12版本的资源列表和Bundle列表"""
         asset_count = self.buffer.read_int32()
         self.manifest.asset_list = []
         
@@ -291,9 +295,10 @@ class YooAssetDeserializer:
             asset.asset_guid = self.buffer.read_utf8()
             asset.asset_tags = self.buffer.read_utf8_array()
             asset.bundle_id = self.buffer.read_int32()
-            asset.depend_bundle_ids = self.buffer.read_int32_array()
+            asset.depend_bundle_ids = self.buffer.read_int32_array()  # 2.3.12版本使用DependBundleIDs
             self.manifest.asset_list.append(asset)
         
+        # 反序列化Bundle列表
         bundle_count = self.buffer.read_int32()
         self.manifest.bundle_list = []
         
@@ -306,41 +311,45 @@ class YooAssetDeserializer:
             bundle.file_size = self.buffer.read_int64()
             bundle.encrypted = self.buffer.read_bool()
             bundle.tags = self.buffer.read_utf8_array()
-            bundle.depend_bundle_ids = self.buffer.read_int32_array()
+            bundle.depend_bundle_ids = self.buffer.read_int32_array()  # 2.3.12版本使用DependBundleIDs
             self.manifest.bundle_list.append(bundle)
 
-def dump_manifest_to_json(manifest: PackageManifest, source_file_name: str, output_dir: Path):
-    json_path = output_dir / f"{source_file_name}.json"
-    manifest_dict = asdict(manifest)
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(manifest_dict, f, ensure_ascii=False, indent=4)
-    print(f"导出资产清单到: {json_path}")
 
 def find_bytes_files(root_path: Path) -> Tuple[str, List[Path]]:
+
     manifest_files_dirs = list(root_path.rglob("ManifestFiles"))
+
     if manifest_files_dirs:
         all_manifest_files = []
         for manifest_dir in manifest_files_dirs:
             if manifest_dir.is_dir():
                 all_manifest_files.extend(list(manifest_dir.glob("*.bytes")))
+        
         if all_manifest_files:
             return "hotfix", all_manifest_files
+
     bytes_files = list(root_path.rglob("*.bytes"))
     if bytes_files:
         return "apk", bytes_files
+    
     return "none", []
+
 
 def convert_bundle_name_to_path(bundle_name: str) -> str:
     if not bundle_name:
         return ""
+    
     if '.' in bundle_name:
         name_part, ext_part = bundle_name.rsplit('.', 1)
         path = name_part.replace('_', os.sep) + '.' + ext_part
     else:
         path = bundle_name.replace('_', os.sep)
+    
     return path
 
+
 def process_manifest_file(bytes_file: Path) -> Optional[PackageManifest]:
+    """读取并反序列化单个清单文件"""
     try:
         binary_data = bytes_file.read_bytes()
         deserializer = YooAssetDeserializer(binary_data)
@@ -349,7 +358,9 @@ def process_manifest_file(bytes_file: Path) -> Optional[PackageManifest]:
         print(f"处理 {bytes_file.name} 时出错: {e}")
         return None
 
+
 def extract_apk_assets(root_path: Path, bytes_files: List[Path], output_dir: Path):
+
     apk_dir = output_dir / "Apk"
     apk_dir.mkdir(parents=True, exist_ok=True)
     
@@ -358,11 +369,10 @@ def extract_apk_assets(root_path: Path, bytes_files: List[Path], output_dir: Pat
         manifest = process_manifest_file(bytes_file)
         if manifest:
             print(f"{bytes_file.name}, 版本: {manifest.file_version}, 包名: {manifest.package_name}, Bundles: {len(manifest.bundle_list)}")
-            dump_manifest_to_json(manifest, bytes_file.name, output_dir)
             for bundle in manifest.bundle_list:
                 all_bundles[bundle.file_hash] = bundle
     
-    bundle_files_count = 0
+    bundle_files_found = 0
     for file_path in root_path.rglob("*"):
         if file_path.is_file() and file_path.stem in all_bundles:
             bundle = all_bundles[file_path.stem]
@@ -372,19 +382,22 @@ def extract_apk_assets(root_path: Path, bytes_files: List[Path], output_dir: Pat
                 target_file = apk_dir / target_path_str
                 target_file.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(file_path, target_file)
-                bundle_files_count += 1
-    print(f"总共提取了 {bundle_files_count} 个文件")
+                bundle_files_found += 1
+    
+    print(f"总共提取了 {bundle_files_found} 个文件")
+
 
 def extract_hotfix_assets(root_path: Path, bytes_files: List[Path], output_dir: Path):
+
     update_dir = output_dir / "Update"
     update_dir.mkdir(parents=True, exist_ok=True)
+    
     all_bundles_map = {}
     for bytes_file in bytes_files:
         manifest = process_manifest_file(bytes_file)
         if not manifest:
             continue
         print(f"{bytes_file.name}, 版本: {manifest.file_version}, 包名: {manifest.package_name}, Bundles: {len(manifest.bundle_list)}")
-        dump_manifest_to_json(manifest, bytes_file.name, output_dir)
         for bundle in manifest.bundle_list:
             all_bundles_map[bundle.file_hash] = bundle
     
@@ -394,40 +407,49 @@ def extract_hotfix_assets(root_path: Path, bytes_files: List[Path], output_dir: 
 
     files_extracted = 0
     found_hashes = set()
+
     for data_file_path in root_path.rglob("__data"):
         if not data_file_path.is_file():
             continue
+
         parent_dir = data_file_path.parent
         file_hash = parent_dir.name
+
         if file_hash in all_bundles_map and file_hash not in found_hashes:
             bundle = all_bundles_map[file_hash]
             target_path_str = convert_bundle_name_to_path(bundle.bundle_name)
+            
             if target_path_str:
                 target_file = update_dir / target_path_str
                 target_file.parent.mkdir(parents=True, exist_ok=True)
+                
                 shutil.copy2(data_file_path, target_file)
                 files_extracted += 1
                 found_hashes.add(file_hash)
+
     print(f"总共提取了 {files_extracted} 个文件")
 
 
-if __name__ == "__main__":
+def main():
+
     if len(sys.argv) != 2:
         print("用法: python Extract.py 输入目录")
         sys.exit(1)
     
     input_path = Path(sys.argv[1])
+    
     if not input_path.exists() or not input_path.is_dir():
         print(f"错误: 输入目录 '{input_path}' 不存在或不是目录")
         sys.exit(1)
 
     asset_type, bytes_files = find_bytes_files(input_path)
+    
     if asset_type == "none":
         print("未找到 .bytes 文件")
         sys.exit(1)
     
-    output_dir = Path(__file__).parent
-    print(f"输出目录: {output_dir}")
+    script_dir = Path(__file__).parent
+    output_dir = script_dir
     
     if asset_type == "apk":
         print(f"检测到: APK 资产 ({len(bytes_files)} 个清单文件)")
@@ -435,3 +457,6 @@ if __name__ == "__main__":
     elif asset_type == "hotfix":
         print(f"检测到: 热更资产 ({len(bytes_files)} 个清单文件)")
         extract_hotfix_assets(input_path, bytes_files, output_dir)
+
+if __name__ == "__main__":
+    main()
