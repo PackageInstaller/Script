@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 
 MANIFEST_FILE_SIGN = 0x594F4F  # YOO
-SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.12"]
+SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.1"]
 
 class BufferReader:
     """二进制数据读取器"""
@@ -180,7 +180,7 @@ class YooAssetDeserializer:
             self._deserialize_v152()
         elif self.version == "2.0.0":
             self._deserialize_v200()
-        elif self.version == "2.3.12":
+        elif self.version == "2.3.1":
             self._deserialize_v2312()
         else:
             raise ValueError(f"不支持的版本: {self.version}")
@@ -207,8 +207,8 @@ class YooAssetDeserializer:
         self.manifest.output_name_style = self.buffer.read_int32()
         
         # 2.0.0+版本新增字段
-        if self.version in ["2.0.0", "2.3.12"]:
-            if self.version == "2.3.12":
+        if self.version in ["2.0.0", "2.3.1"]:
+            if self.version == "2.3.1":
                 self.manifest.build_bundle_type = self.buffer.read_int32()
             self.manifest.build_pipeline = self.buffer.read_utf8()
         
@@ -216,7 +216,7 @@ class YooAssetDeserializer:
         self.manifest.package_version = self.buffer.read_utf8()
         
         # 2.3.12版本新增PackageNote字段
-        if self.version == "2.3.12":
+        if self.version == "2.3.1":
             self.manifest.package_note = self.buffer.read_utf8()
         
         if self.manifest.enable_addressable and self.manifest.location_to_lower:
