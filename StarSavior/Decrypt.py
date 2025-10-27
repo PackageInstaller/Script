@@ -1,6 +1,7 @@
 import argparse
 import os
 
+
 class Decrypt:
     _KEY = bytes([0xAA, 0xBB])
     _EXPANDED_KEY = (_KEY * (128 // len(_KEY) + 1))[:128]
@@ -27,20 +28,21 @@ class Decrypt:
         cp = self._base_stream.tell()
         od = self._base_stream.read(count)
         if not od:
-            return b''
+            return b""
         return self._process_xor(od, cp)
 
+
 def decrypt(file):
-    with open(file, 'rb') as f:
+    with open(file, "rb") as f:
         dec = Decrypt(f).read()
-    with open(file, 'wb') as f:
+    with open(file, "wb") as f:
         f.write(dec)
     print(f"解密: {file}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('path')
+    parser.add_argument("path")
     args = parser.parse_args()
 
     for root, dirs, files in os.walk(args.path):

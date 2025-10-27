@@ -68,14 +68,14 @@ class ZipUtils:
     def inflateCCZBuffer(self, content: bytes) -> bytes | Image.Image:
         file_len = len(content)
         if file_len < 16:
-            return b''
+            return b""
         header = content[0:4]
 
         if header == b"CCZp":
             try:
                 initial_sum = struct.unpack(">H", content[4:6])[0]
                 if initial_sum != 0:
-                    return b''
+                    return b""
                 key_stream = self._generate_key_stream(initial_sum)
                 data_len_bytes = file_len - 12
                 num_uints = data_len_bytes // 4
@@ -84,7 +84,7 @@ class ZipUtils:
                 )
                 decrypted_uints = self._decrypt_data(encrypted_uints, key_stream)
                 if not decrypted_uints:
-                    return b''
+                    return b""
                 buffer = b"".join(
                     [struct.pack("<I", val) for val in decrypted_uints[1:]]
                 )
@@ -93,12 +93,12 @@ class ZipUtils:
                     buffer += content[-mod:]
                 return zlib.decompress(buffer)
             except Exception:
-                return b''
+                return b""
         elif header == b"CCZ!":
             try:
                 pvr_data = zlib.decompress(content[16:])
                 if len(pvr_data) < 52 or pvr_data[0:4] != b"PVR\x03":
-                    return b''
+                    return b""
                 h = struct.unpack("<IQIIIIIIIII", pvr_data[4:52])
                 flags, p_format_64, height, width, metadata_size = (
                     h[0],
@@ -109,7 +109,7 @@ class ZipUtils:
                 )
                 p_format = p_format_64 & 0xFFFFFFFF if (p_format_64 >> 32) == 0 else -1
                 if p_format != 23:
-                    return b''
+                    return b""
                 decoded_pixels = decode_etc2a8(
                     pvr_data[52 + metadata_size :], width, height
                 )
@@ -129,5 +129,5 @@ class ZipUtils:
 
                 return Image.frombytes("RGBA", (width, height), bytes(corrected))
             except Exception:
-                return b''
-        return b''
+                return b""
+        return b""

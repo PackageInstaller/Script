@@ -4,12 +4,14 @@ from typing import List, Dict
 import UnityPy
 import pandas as pd
 
+
 def load_manifest(ab_path: Path) -> Dict:
     env = UnityPy.load(str(ab_path))
     for obj in env.objects:
         if obj.type.name == "AssetBundleManifest":
             return obj.read_typetree()
     return {}
+
 
 def parse_manifest(tree: Dict) -> List[Dict]:
     index_to_name = {int(idx): name for idx, name in tree.get("AssetBundleNames", [])}
@@ -43,9 +45,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("a")
-    parser.add_argument(
-        "-o"
-    )
+    parser.add_argument("-o")
     args = parser.parse_args()
     ab_path = Path(args.a).expanduser()
     tree = load_manifest(ab_path)
@@ -57,6 +57,7 @@ def main() -> None:
     elif out_path.suffix.lower() == ".csv":
         df = pd.json_normalize(parsed)
         df.to_csv(out_path, index=False)
+
 
 if __name__ == "__main__":
     main()
