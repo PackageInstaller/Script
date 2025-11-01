@@ -1,12 +1,27 @@
 import zlib
 import struct
+from typing import Optional
 from PIL import Image
 from texture2ddecoder import decode_etc2a8
 
 
 class ZipUtils:
-    def __init__(self, key_part1: int, key_part2: int, key_part3: int, key_part4: int):
-        self.s_uEncryptedPvrKeyParts = [key_part1, key_part2, key_part3, key_part4]
+    def __init__(
+        self,
+        key_part1: Optional[int] = None,
+        key_part2: Optional[int] = None,
+        key_part3: Optional[int] = None,
+        key_part4: Optional[int] = None,
+    ):
+        """
+        Args:
+            key_part1-4: 解密密钥的四个部分，仅在处理 CCZp 格式时需要
+                        如果只处理 CCZ! 格式，可以不传入密钥
+        """
+        if key_part1 and key_part2 and key_part3 and key_part4:
+            self.s_uEncryptedPvrKeyParts = [key_part1, key_part2, key_part3, key_part4]
+        else:
+            self.s_uEncryptedPvrKeyParts = None
 
     def _generate_key_stream(self, initial_sum: int) -> list[int]:
         s_uEncryptionKey = [0] * 1024
@@ -73,6 +88,10 @@ class ZipUtils:
 
         if header == b"CCZp":
             try:
+                if self.s_uEncryptedPvrKeyParts is None:
+                    print("错误: CCZp 格式需要提供解密密钥")
+                    return b""
+
                 initial_sum = struct.unpack(">H", content[4:6])[0]
                 if initial_sum != 0:
                     return b""
