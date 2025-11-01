@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 
 MANIFEST_FILE_SIGN = 0x594F4F  # YOO
-SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.1"]
+SUPPORTED_VERSIONS = ["1.5.2", "2.0.0", "2.3.1", "2.3.17"]
 
 class BufferReader:
     """二进制数据读取器"""
@@ -67,6 +67,13 @@ class BufferReader:
     def read_int64(self) -> int:
         """读取64位整数（小端序）"""
         return struct.unpack('<q', self.read_bytes(8))[0]
+    
+    def skip_utf8(self):
+        """跳过UTF-8字符串而不解析"""
+        length = self.read_uint16()
+        if length > 0:
+            self._check_reader_index(length)
+            self.index += length
     
     def read_utf8(self) -> str:
         """读取UTF-8字符串"""
@@ -143,8 +150,10 @@ class PackageManifest:
     """资源包清单"""
     file_version: str = ""
     enable_addressable: bool = False
+    support_extensionless: bool = False  # 2.3.17版本新增
     location_to_lower: bool = False
     include_asset_guid: bool = False
+    replace_asset_path_with_address: bool = False  # 2.3.17版本新增
     output_name_style: int = 0
     build_bundle_type: int = 0  # 2.3.12版本新增
     build_pipeline: str = ""  # 2.0.0+版本使用
@@ -182,6 +191,8 @@ class YooAssetDeserializer:
             self._deserialize_v200()
         elif self.version == "2.3.1":
             self._deserialize_v2312()
+        elif self.version == "2.3.17":
+            self._deserialize_v2317()
         else:
             raise ValueError(f"不支持的版本: {self.version}")
         
@@ -202,25 +213,38 @@ class YooAssetDeserializer:
         self.manifest = PackageManifest()
         self.manifest.file_version = file_version
         self.manifest.enable_addressable = self.buffer.read_bool()
+        
+        # 2.3.17版本新增SupportExtensionless字段
+        if self.version == "2.3.17":
+            self.manifest.support_extensionless = self.buffer.read_bool()
+        
         self.manifest.location_to_lower = self.buffer.read_bool()
         self.manifest.include_asset_guid = self.buffer.read_bool()
+        
+        # 2.3.17版本新增ReplaceAssetPathWithAddress字段
+        if self.version == "2.3.17":
+            self.manifest.replace_asset_path_with_address = self.buffer.read_bool()
+        
         self.manifest.output_name_style = self.buffer.read_int32()
         
         # 2.0.0+版本新增字段
-        if self.version in ["2.0.0", "2.3.1"]:
-            if self.version == "2.3.1":
+        if self.version in ["2.0.0", "2.3.1", "2.3.17"]:
+            if self.version in ["2.3.1", "2.3.17"]:
                 self.manifest.build_bundle_type = self.buffer.read_int32()
             self.manifest.build_pipeline = self.buffer.read_utf8()
         
         self.manifest.package_name = self.buffer.read_utf8()
         self.manifest.package_version = self.buffer.read_utf8()
         
-        # 2.3.12版本新增PackageNote字段
-        if self.version == "2.3.1":
+        # 2.3.1+版本新增PackageNote字段
+        if self.version in ["2.3.1", "2.3.17"]:
             self.manifest.package_note = self.buffer.read_utf8()
         
         if self.manifest.enable_addressable and self.manifest.location_to_lower:
             raise ValueError("Addressable 不支持，location_to_lower 为 true")
+        
+        if not self.manifest.enable_addressable and self.manifest.replace_asset_path_with_address:
+            raise ValueError("ReplaceAssetPathWithAddress 需要启用 Addressable")
     
     def _deserialize_v152(self):
         """反序列化1.5.2版本的资源列表和Bundle列表"""
@@ -312,6 +336,47 @@ class YooAssetDeserializer:
             bundle.encrypted = self.buffer.read_bool()
             bundle.tags = self.buffer.read_utf8_array()
             bundle.depend_bundle_ids = self.buffer.read_int32_array()  # 2.3.12版本使用DependBundleIDs
+            self.manifest.bundle_list.append(bundle)
+    
+    def _deserialize_v2317(self):
+        """反序列化2.3.17版本的资源列表和Bundle列表"""
+        asset_count = self.buffer.read_int32()
+        self.manifest.asset_list = []
+        
+        # 判断是否需要替换AssetPath
+        replace_asset_path = self.manifest.enable_addressable and self.manifest.replace_asset_path_with_address
+        
+        for _ in range(asset_count):
+            asset = PackageAsset()
+            asset.address = self.buffer.read_utf8()
+            
+            if replace_asset_path:
+                # 如果启用替换，则用Address代替AssetPath，并跳过解析
+                asset.asset_path = asset.address
+                self.buffer.skip_utf8()
+            else:
+                asset.asset_path = self.buffer.read_utf8()
+            
+            asset.asset_guid = self.buffer.read_utf8()
+            asset.asset_tags = self.buffer.read_utf8_array()
+            asset.bundle_id = self.buffer.read_int32()
+            asset.depend_bundle_ids = self.buffer.read_int32_array()
+            self.manifest.asset_list.append(asset)
+        
+        # 反序列化Bundle列表
+        bundle_count = self.buffer.read_int32()
+        self.manifest.bundle_list = []
+        
+        for _ in range(bundle_count):
+            bundle = PackageBundle()
+            bundle.bundle_name = self.buffer.read_utf8()
+            bundle.unity_crc = self.buffer.read_uint32()
+            bundle.file_hash = self.buffer.read_utf8()
+            bundle.file_crc = str(self.buffer.read_uint32())  # 2.3.17版本FileCRC改为UInt32
+            bundle.file_size = self.buffer.read_int64()
+            bundle.encrypted = self.buffer.read_bool()
+            bundle.tags = self.buffer.read_utf8_array()
+            bundle.depend_bundle_ids = self.buffer.read_int32_array()
             self.manifest.bundle_list.append(bundle)
 
 
