@@ -20,36 +20,35 @@ def parse_manifest(tree: Dict) -> List[Dict]:
     for entry in tree.get("AssetBundleInfos", []):
         idx: int = int(entry[0])
         raw_info: Dict = entry[1]
-        name = index_to_name.get(idx, f"<Unknown:{idx}>")
+        name = index_to_name.get(idx)
 
         h_bytes = raw_info["AssetBundleHash"]
         hash_hex = "".join(f"{h_bytes[f'bytes[{i}]']:02x}" for i in range(16))
 
         deps_idx = raw_info.get("AssetBundleDependencies", [])
-        deps_names = [index_to_name.get(d, f"<Unknown:{d}>") for d in deps_idx]
+        deps_names = [index_to_name.get(d) for d in deps_idx]
 
         results.append(
             {
-                # "Index": idx, # 索引
+                "Index": idx,
                 "AssetBundleName": name,
                 "AssetBundleHash": hash_hex,
-                # "DepsIndex": deps_idx, # 依赖索引
+                "DepsIndex": deps_idx,
                 "AssetBundleDependencies": deps_names,
             }
         )
     return results
 
 
-def main() -> None:
+if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("a")
+    parser.add_argument("ab")
     parser.add_argument("-o")
     args = parser.parse_args()
-    ab_path = Path(args.a).expanduser()
-    tree = load_manifest(ab_path)
-    parsed = parse_manifest(tree)
+    ab_path = Path(args.ab).expanduser()
+    parsed = parse_manifest(load_manifest(ab_path))
 
     out_path = Path(args.o)
     if out_path.suffix.lower() == ".json":
@@ -57,7 +56,3 @@ def main() -> None:
     elif out_path.suffix.lower() == ".csv":
         df = pd.json_normalize(parsed)
         df.to_csv(out_path, index=False)
-
-
-if __name__ == "__main__":
-    main()

@@ -5,9 +5,9 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def process(ip, output_path):
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "wb") as f:
+def process(ip, op):
+    os.makedirs(os.path.dirname(op), exist_ok=True)
+    with open(op, "wb") as f:
         f.write((UnityPy.load(ip)).file.save())
     return True, None
 
@@ -22,22 +22,22 @@ def main():
     key_bytes = bytes.fromhex(a.k)
     UnityPy.set_assetbundle_decrypt_key(key_bytes)
 
-    tasks = []
+    task = []
     for r, _, files in os.walk(a.i):
         for n in files:
             ip = os.path.join(r, n)
             rp = os.path.relpath(r, a.i)
-            tasks.append((ip, os.path.join(a.o, rp, n)))
+            task.append((ip, os.path.join(a.o, rp, n)))
     sc = 0
     fc = 0
 
     with ThreadPoolExecutor(max_workers=32) as e:
-        fp = {e.submit(process, ip, op): ip for ip, op in tasks}
-        pb = tqdm(as_completed(fp), total=len(tasks), desc="处理中", unit="个文件")
+        fp = {e.submit(process, ip, op): ip for ip, op in task}
+        pb = tqdm(as_completed(fp), total=len(task), desc="处理中", unit="个文件")
 
-        for future in pb:
-            ip = fp[future]
-            s, em = future.result()
+        for fu in pb:
+            ip = fp[fu]
+            s, em = fu.result()
             if s:
                 sc += 1
             else:

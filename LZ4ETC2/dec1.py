@@ -3,9 +3,10 @@ import lz4.block
 import struct
 from PIL import Image
 
+
 def decompress(compressed_data: bytes) -> bytearray:
 
-    total_uncompressed_size = struct.unpack('<I', compressed_data[4:8])[0]
+    total_uncompressed_size = struct.unpack("<I", compressed_data[4:8])[0]
 
     final_buffer = bytearray()
     current_pos = 8
@@ -13,21 +14,25 @@ def decompress(compressed_data: bytes) -> bytearray:
 
     block_index = 0
     while current_pos < len(compressed_data):
-        if current_pos + 4 > len(compressed_data): 
+        if current_pos + 4 > len(compressed_data):
             break
-        compressed_block_size = struct.unpack('<I', compressed_data[current_pos : current_pos + 4])[0]
+        compressed_block_size = struct.unpack(
+            "<I", compressed_data[current_pos : current_pos + 4]
+        )[0]
         current_pos += 4
-        if compressed_block_size == 0: 
+        if compressed_block_size == 0:
             break
 
-        compressed_block = compressed_data[current_pos : current_pos + compressed_block_size]
+        compressed_block = compressed_data[
+            current_pos : current_pos + compressed_block_size
+        ]
         current_pos += compressed_block_size
 
         try:
             decompressed_chunk = lz4.block.decompress(
                 compressed_block,
                 uncompressed_size=16 * 1024,
-                dict=last_decompressed_block
+                dict=last_decompressed_block,
             )
             final_buffer.extend(decompressed_chunk)
             last_decompressed_block = decompressed_chunk
@@ -41,8 +46,8 @@ def decompress(compressed_data: bytes) -> bytearray:
 
 def convert_to_image(pkm_data: bytes, output_path: str):
 
-    header_fields = struct.unpack_from('>HHHHH', pkm_data, 6)
-    
+    header_fields = struct.unpack_from(">HHHHH", pkm_data, 6)
+
     etc_format_enum = header_fields[0]
     width = header_fields[1]
     height = header_fields[2]
@@ -58,7 +63,8 @@ def convert_to_image(pkm_data: bytes, output_path: str):
     decoded_pixels = decoder_func(pixel_data, width, height)
 
     image = Image.frombytes(mode, (width, height), decoded_pixels)
-    image.save(output_path, 'PNG')
+    image.save(output_path, "PNG")
+
 
 if __name__ == "__main__":
     with open("ljzzy_1.jpg", "rb") as f:
