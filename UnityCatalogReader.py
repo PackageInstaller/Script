@@ -2,7 +2,7 @@ import json
 import base64
 import struct
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -60,8 +60,8 @@ class ObjectInitializationData:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
-            "object_type": self.object_type.to_dict() if self.object_type else None,
             "data": self.data,
+            "object_type": self.object_type.to_dict() if self.object_type else None,
         }
 
 
@@ -99,12 +99,11 @@ class CommonInfo:
 class AssetInfo:
     """资产信息（ResourceLocation）"""
 
-    key: str
     internal_id: str
     provider_id: str
-    primary_key: str
+    primary_key: str  # 唯一标识
     dependency_hash_code: int = 0
-    dependency_key: Optional[str] = None
+    dependency_key: Any = None  # 可以是任意类型：字符串、数字等
     dependencies: Optional[List["AssetInfo"]] = None
     bundle_name: str = ""
     bundle_size: int = 0
@@ -267,8 +266,8 @@ class BinaryReader:
 
         return ObjectInitializationData(
             id=self.read_encoded_string(id_offset) or "",
-            object_type=self.read_serialized_type(object_type_offset),
             data=self.read_encoded_string(data_offset) or "",
+            object_type=self.read_serialized_type(object_type_offset),
         )
 
     def read_hash128(self, offset: int) -> str:
@@ -277,7 +276,17 @@ class BinaryReader:
             return ""
 
         self.pos = offset
-        hash_bytes = self.read(16)
+        v0 = self.u32
+        v1 = self.u32
+        v2 = self.u32
+        v3 = self.u32
+
+        hash_bytes = bytearray(16)
+        hash_bytes[0:4] = v0.to_bytes(4, "big")
+        hash_bytes[4:8] = v1.to_bytes(4, "big")
+        hash_bytes[8:12] = v2.to_bytes(4, "big")
+        hash_bytes[12:16] = v3.to_bytes(4, "big")
+
         return hash_bytes.hex()
 
     def read_common_info(self, offset: int) -> Optional[CommonInfo]:
@@ -286,7 +295,7 @@ class BinaryReader:
             return None
 
         self.pos = offset
-        timeout = struct.unpack("<h", self.read(2))[0]  # short
+        timeout = struct.unpack("<h", self.read(2))[0]
         redirect_limit = self.u8
         retry_count = self.u8
         flags = self.i32
@@ -323,7 +332,7 @@ class BinaryReader:
         }
 
     def decode_object(self, offset: int) -> Any:
-        """解码对象"""
+        """解码对象（V2格式）"""
         if offset == 0xFFFFFFFF:
             return None
 
@@ -342,25 +351,25 @@ class BinaryReader:
 
         match_name = serialized_type.get_match_name()
 
-        if "System.Int32" in match_name:
+        if match_name == "mscorlib; System.Int32":
             if is_default_object:
                 return 0
             self.pos = object_offset
             return self.i32
 
-        elif "System.Int64" in match_name:
+        elif match_name == "mscorlib; System.Int64":
             if is_default_object:
                 return 0
             self.pos = object_offset
             return self.i64
 
-        elif "System.Boolean" in match_name:
+        elif match_name == "mscorlib; System.Boolean":
             if is_default_object:
                 return False
             self.pos = object_offset
             return self.bool_val
 
-        elif "System.String" in match_name:
+        elif match_name == "mscorlib; System.String":
             if is_default_object:
                 return ""
             self.pos = object_offset
@@ -368,12 +377,15 @@ class BinaryReader:
             sep = self.str(2, "utf-16le")
             return self.read_encoded_string(string_offset, sep)
 
-        elif "UnityEngine.Hash128" in match_name:
+        elif match_name == "UnityEngine.CoreModule; UnityEngine.Hash128":
             if is_default_object:
                 return None
             return self.read_hash128(object_offset)
 
-        elif "AssetBundleRequestOptions" in match_name:
+        elif (
+            match_name
+            == "Unity.ResourceManager; UnityEngine.ResourceManagement.ResourceProviders.AssetBundleRequestOptions"
+        ):
             if is_default_object:
                 return None
             return self.read_asset_bundle_request_options(object_offset)
@@ -385,21 +397,22 @@ class BinaryReader:
 class UnityCatalogReader:
     """Unity Addressables Catalog读取器"""
 
-    def __init__(self, catalog_path: str):
+    def __init__(self, catalog_data: Union[str, bytes]):
         """
         初始化catalog读取器
 
         Args:
-            catalog_path: catalog文件路径（支持JSON和二进制格式）
+            catalog_data: catalog文件路径（str）或字节流数据（bytes），支持JSON和二进制格式
         """
-        self.catalog_path = catalog_path
+        self.catalog_path = catalog_data if isinstance(catalog_data, str) else None
+        self.catalog_bytes = catalog_data if isinstance(catalog_data, bytes) else None
         self.locator_id = ""
         self.build_result_hash = ""
         self.version = 1
         self.instance_provider_data: Optional[ObjectInitializationData] = None
         self.scene_provider_data: Optional[ObjectInitializationData] = None
         self.resource_provider_data: List[ObjectInitializationData] = []
-        self.assets: Dict[str, AssetInfo] = {}
+        self.resources: Dict[Any, List[AssetInfo]] = {}
 
         file_type = self._detect_file_type()
 
@@ -410,29 +423,43 @@ class UnityCatalogReader:
             print("二进制格式catalog文件")
             self._load_binary_catalog()
         else:
-            raise ValueError(f"不支持的catalog文件类型: {catalog_path}")
+            raise ValueError(f"不支持的catalog文件类型")
 
     def _detect_file_type(self) -> CatalogFileType:
         """检测catalog文件类型"""
         try:
-            with open(self.catalog_path, "rb") as f:
-                data = f.read(4)
-                magic = struct.unpack("<I", data)[0]
+            if self.catalog_bytes:
+                if len(self.catalog_bytes) < 4:
+                    return CatalogFileType.NONE
+                magic = struct.unpack("<I", self.catalog_bytes[:4])[0]
                 if magic == 0x0DE38942 or magic == 0x4289E30D:
                     return CatalogFileType.BINARY
                 else:
                     return CatalogFileType.JSON
+            else:
+                with open(self.catalog_path, "rb") as f:
+                    data = f.read(4)
+                    magic = struct.unpack("<I", data)[0]
+                    if magic == 0x0DE38942 or magic == 0x4289E30D:
+                        return CatalogFileType.BINARY
+                    else:
+                        return CatalogFileType.JSON
 
         except Exception:
             return CatalogFileType.NONE
 
     def _load_json_catalog(self):
         """加载JSON格式的catalog文件"""
-        with open(self.catalog_path, "r", encoding="utf-8") as f:
-            catalog_data = json.load(f)
+        if self.catalog_bytes:
+            json_str = self.catalog_bytes.decode("utf-8")
+            catalog_data = json.loads(json_str)
+        else:
+            with open(self.catalog_path, "r", encoding="utf-8") as f:
+                catalog_data = json.load(f)
 
         self.locator_id = catalog_data.get("m_LocatorId", "")
         self.build_result_hash = catalog_data.get("m_BuildResultHash", "")
+        self.version = 0
 
         print(f"Catalog版本: {self.version}")
         print(f"定位器ID: {self.locator_id}")
@@ -590,15 +617,20 @@ class UnityCatalogReader:
             resource_type = (
                 resource_types[rt] if rt >= 0 and rt < len(resource_types) else None
             )
+
+            hash_code = hash(internal_id) * 31 + hash(provider_id)
+            hash_code = hash_code & 0xFFFFFFFF
+            if hash_code >= 0x80000000:
+                hash_code -= 0x100000000
+
             asset = AssetInfo(
-                key=primary_key,
                 internal_id=internal_id,
                 provider_id=provider_id,
                 primary_key=primary_key,
                 dependency_hash_code=dh,
-                dependency_key=str(dependency_key) if dependency_key else None,
+                dependency_key=dependency_key,
                 resource_type=resource_type,
-                hash_code=hash(internal_id) * 31 + hash(provider_id),
+                hash_code=hash_code,
             )
             if obj_data and isinstance(obj_data, dict):
                 asset.bundle_name = obj_data.get("m_BundleName", "")
@@ -612,10 +644,12 @@ class UnityCatalogReader:
                         common_info_version = 3
                     else:
                         common_info_version = 2
+                redirect_limit_val = obj_data.get("m_RedirectLimit", 0)
+                redirect_limit = redirect_limit_val & 0xFF
 
                 asset.common_info = CommonInfo(
                     timeout=obj_data.get("m_Timeout", 0),
-                    redirect_limit=obj_data.get("m_RedirectLimit", 0),
+                    redirect_limit=redirect_limit,
                     retry_count=obj_data.get("m_RetryCount", 0),
                     asset_load_mode=obj_data.get("m_AssetLoadMode", 0),
                     chunked_transfer=obj_data.get("m_ChunkedTransfer", False),
@@ -633,19 +667,30 @@ class UnityCatalogReader:
 
             locations.append(asset)
 
+        self.resources = {}
         for i, bucket in enumerate(buckets):
             if i < len(keys):
+                bucket_key = keys[i]
+                bucket_locations = []
                 for entry_idx in bucket["entries"]:
                     if entry_idx < len(locations):
-                        location = locations[entry_idx]
-                        self.assets[location.primary_key] = location
+                        bucket_locations.append(locations[entry_idx])
+                if bucket_locations:
+                    self.resources[bucket_key] = bucket_locations
 
-        print(f"解析完成，共 {len(self.assets)} 个资产")
+        total_locations = sum(len(locs) for locs in self.resources.values())
+        print(
+            f"解析完成，共 {len(self.resources)} 个资源键，{total_locations} 个资源位置"
+        )
 
     def _load_binary_catalog(self):
         """加载二进制格式的catalog文件"""
-        with open(self.catalog_path, "rb") as f:
-            binary_data = f.read()
+        if self.catalog_bytes:
+            binary_data = self.catalog_bytes
+        else:
+
+            with open(self.catalog_path, "rb") as f:
+                binary_data = f.read()
 
         reader = BinaryReader(binary_data)
 
@@ -694,10 +739,17 @@ class UnityCatalogReader:
 
         self._parse_binary_resources(reader, keys_offset)
 
+    def _decode_binary_object_v2(self, reader: BinaryReader, offset: int) -> Any:
+        """解码二进制对象（V2格式），用于解码key等"""
+        return reader.decode_object(offset)
+
     def _parse_binary_resources(self, reader: BinaryReader, keys_offset: int):
         key_location_offsets = reader.read_offset_array(keys_offset)
         total_groups = len(key_location_offsets) // 2
         print(f"找到 {total_groups} 个资源组")
+
+        self.resources = {}
+        total_locations = 0
 
         for i in range(0, len(key_location_offsets), 2):
             group_index = i // 2
@@ -705,24 +757,42 @@ class UnityCatalogReader:
             try:
                 key_offset = key_location_offsets[i]
                 location_list_offset = key_location_offsets[i + 1]
+
+                key = self._decode_binary_object_v2(reader, key_offset)
+                if key is None:
+                    key = f"key_{group_index}"
+
                 location_offsets = reader.read_offset_array(location_list_offset)
+                locations = []
 
                 for location_offset in location_offsets:
                     try:
-                        self._read_binary_resource_location(reader, location_offset)
+                        location = self._read_binary_resource_location(
+                            reader, location_offset
+                        )
+                        if location:
+                            locations.append(location)
                     except Exception as e:
                         continue
+
+                if locations:
+                    self.resources[key] = locations
+                    total_locations += len(locations)
 
             except Exception as e:
                 print(f"处理资源组 {group_index} 失败: {e}")
                 continue
 
-        print(f"解析完成，共 {len(self.assets)} 个资产")
+        print(
+            f"解析完成，共 {len(self.resources)} 个资源键，{total_locations} 个资源位置"
+        )
 
-    def _read_binary_resource_location(self, reader: BinaryReader, offset: int):
-        """读取二进制格式的资源位置"""
+    def _read_binary_resource_location(
+        self, reader: BinaryReader, offset: int
+    ) -> Optional[AssetInfo]:
+        """读取二进制格式的资源位置，返回AssetInfo对象"""
         if offset in reader.resource_cache:
-            return
+            return reader.resource_cache[offset]
 
         reader.pos = offset
 
@@ -741,10 +811,13 @@ class UnityCatalogReader:
         provider_id = reader.read_encoded_string(provider_id_offset, ".") or ""
         resource_type = reader.read_serialized_type(type_offset)
         data = reader.decode_object(data_offset)
+
         hash_code = hash(internal_id) * 31 + hash(provider_id)
+        hash_code = hash_code & 0xFFFFFFFF
+        if hash_code >= 0x80000000:
+            hash_code -= 0x100000000
 
         asset = AssetInfo(
-            key=primary_key,
             internal_id=internal_id,
             provider_id=provider_id,
             primary_key=primary_key,
@@ -767,28 +840,31 @@ class UnityCatalogReader:
                 dependencies = []
 
                 for dep_offset in dependency_offsets:
-                    self._read_binary_resource_location(reader, dep_offset)
-                    if dep_offset in reader.resource_cache:
-                        dep_key = reader.resource_cache[dep_offset]
-                        if dep_key in self.assets:
-                            dependencies.append(self.assets[dep_key])
+                    dep_asset = self._read_binary_resource_location(reader, dep_offset)
+                    if dep_asset:
+                        dependencies.append(dep_asset)
 
                 asset.dependencies = dependencies if dependencies else None
-                if len(dependency_offsets) == 1:
-                    dep_offset = dependency_offsets[0]
-                    if dep_offset in reader.resource_cache:
-                        asset.dependency_key = reader.resource_cache[dep_offset]
+                asset.dependency_key = None
             except Exception as e:
                 pass
 
-        reader.resource_cache[offset] = primary_key
-        self.assets[primary_key] = asset
+        reader.resource_cache[offset] = asset
+        return asset
+
+    def get_all_locations(self) -> List[AssetInfo]:
+        """获取所有资源位置的扁平列表"""
+        all_locations = []
+        for locations in self.resources.values():
+            all_locations.extend(locations)
+        return all_locations
 
     def get_asset_list(self) -> List[Dict[str, Any]]:
-        """获取详细的资产列表"""
+        """获取详细的资产列表（扁平化）"""
         asset_list = []
+        all_locations = self.get_all_locations()
 
-        for asset in self.assets.values():
+        for asset in all_locations:
             data_dict = None
             if asset.data and isinstance(asset.data, dict):
                 data_dict = asset.data.copy()
@@ -798,12 +874,15 @@ class UnityCatalogReader:
                     data_dict["common_info"] = data_dict["common_info"].to_dict()
 
             asset_info = {
-                "key": asset.key,
                 "internal_id": asset.internal_id,
                 "provider_id": asset.provider_id,
                 "primary_key": asset.primary_key,
                 "dependency_hash_code": asset.dependency_hash_code,
-                "dependency_key": asset.dependency_key,
+                "dependency_key": (
+                    str(asset.dependency_key)
+                    if asset.dependency_key is not None
+                    else None
+                ),
                 "bundle_name": asset.bundle_name,
                 "bundle_size": asset.bundle_size,
                 "crc": asset.crc,
@@ -820,7 +899,6 @@ class UnityCatalogReader:
             if asset.dependencies:
                 asset_info["dependencies"] = [
                     {
-                        "key": dep.key,
                         "internal_id": dep.internal_id,
                         "provider_id": dep.provider_id,
                         "primary_key": dep.primary_key,
@@ -832,9 +910,76 @@ class UnityCatalogReader:
 
         return asset_list
 
-    def export_to_json(self, output_path: str = "assets.json"):
-        """导出所有资产信息到JSON文件"""
-        all_assets = self.get_asset_list()
+    def get_resources_dict(self) -> Dict[str, List[Dict[str, Any]]]:
+        """获取资源字典（保持key->locations结构）"""
+        result = {}
+        for key, locations in self.resources.items():
+            key_str = str(key)
+            result[key_str] = []
+
+            for asset in locations:
+                data_dict = None
+                if asset.data and isinstance(asset.data, dict):
+                    data_dict = asset.data.copy()
+                    if "common_info" in data_dict and isinstance(
+                        data_dict["common_info"], CommonInfo
+                    ):
+                        data_dict["common_info"] = data_dict["common_info"].to_dict()
+
+                asset_info = {
+                    "internal_id": asset.internal_id,
+                    "provider_id": asset.provider_id,
+                    "primary_key": asset.primary_key,
+                    "dependency_hash_code": asset.dependency_hash_code,
+                    "dependency_key": (
+                        str(asset.dependency_key)
+                        if asset.dependency_key is not None
+                        else None
+                    ),
+                    "bundle_name": asset.bundle_name,
+                    "bundle_size": asset.bundle_size,
+                    "crc": asset.crc,
+                    "hash": asset.hash,
+                    "hash_code": asset.hash_code,
+                    "resource_type": (
+                        asset.resource_type.to_dict() if asset.resource_type else None
+                    ),
+                    "common_info": (
+                        asset.common_info.to_dict() if asset.common_info else None
+                    ),
+                    "data": data_dict,
+                }
+                if asset.dependencies:
+                    asset_info["dependencies"] = [
+                        {
+                            "internal_id": dep.internal_id,
+                            "provider_id": dep.provider_id,
+                            "primary_key": dep.primary_key,
+                        }
+                        for dep in asset.dependencies
+                    ]
+
+                result[key_str].append(asset_info)
+
+        return result
+
+    def export_to_json(
+        self, output_path: str = "assets.json", flat_structure: bool = True
+    ):
+        """
+        导出所有资产信息到JSON文件
+
+        Args:
+            output_path: 输出文件路径
+            flat_structure: True=扁平化资产列表, False=保持key->locations结构
+        """
+        if flat_structure:
+            all_assets = self.get_asset_list()
+            assets_data = all_assets
+        else:
+            assets_data = self.get_resources_dict()
+            all_assets = self.get_asset_list()
+
         provider_stats = {}
         for asset in all_assets:
             provider_type = (
@@ -843,13 +988,16 @@ class UnityCatalogReader:
                 else asset["provider_id"]
             )
             provider_stats[provider_type] = provider_stats.get(provider_type, 0) + 1
+
         export_data = {
             "catalog_info": {
                 "version": self.version,
                 "locator_id": self.locator_id,
                 "build_result_hash": self.build_result_hash,
-                "total_assets": len(all_assets),
+                "total_resource_keys": len(self.resources),
+                "total_locations": len(all_assets),
                 "export_timestamp": __import__("datetime").datetime.now().isoformat(),
+                "structure_type": "flat" if flat_structure else "grouped",
             },
             "provider_data": {
                 "instance_provider": (
@@ -869,7 +1017,7 @@ class UnityCatalogReader:
                 ),
             },
             "statistics": {"provider_types": provider_stats},
-            "assets": all_assets,
+            "assets" if flat_structure else "resources": assets_data,
         }
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(export_data, f, ensure_ascii=False, indent=2)
