@@ -42,7 +42,7 @@ class ZipUtils:
                 ) & 0xFFFFFFFF
                 mx ^= (
                     (v8 ^ s_uEncryptionKey[v6 + 1])
-                    + (self.s_uEncryptedPvrKeyParts[v10] ^ v5)
+                    + (self.s_uEncryptedPvrKeyParts[v10] ^ v5) # pyright: ignore[reportOptionalSubscript]
                 ) & 0xFFFFFFFF
                 s_uEncryptionKey[v6] = (s_uEncryptionKey[v6] + mx) & 0xFFFFFFFF
                 v5 = s_uEncryptionKey[v6]
@@ -52,7 +52,7 @@ class ZipUtils:
             y = s_uEncryptionKey[0]
             mx = (((v5 >> 5) ^ (y << 2)) + ((y >> 3) ^ (v5 << 4))) & 0xFFFFFFFF
             mx ^= (
-                (v8 ^ y) + (self.s_uEncryptedPvrKeyParts[((~v9) & 3)] ^ v5)
+                (v8 ^ y) + (self.s_uEncryptedPvrKeyParts[((~v9) & 3)] ^ v5) # pyright: ignore[reportOptionalSubscript]
             ) & 0xFFFFFFFF
             s_uEncryptionKey[1023] = (s_uEncryptionKey[1023] + mx) & 0xFFFFFFFF
             v5 = s_uEncryptionKey[1023]
@@ -110,12 +110,14 @@ class ZipUtils:
                 mod = data_len_bytes % 4
                 if mod > 0:
                     buffer += content[-mod:]
+                # 解压后就是pvr格式了
                 return zlib.decompress(buffer)
             except Exception:
                 return b""
         elif header == b"CCZ!":
             try:
                 pvr_data = zlib.decompress(content[16:])
+                # 解压后就是pvr格式了，这下面是我用来处理绯红神约的，有需要可以自己改成别的
                 if len(pvr_data) < 52 or pvr_data[0:4] != b"PVR\x03":
                     return b""
                 h = struct.unpack("<IQIIIIIIIII", pvr_data[4:52])
