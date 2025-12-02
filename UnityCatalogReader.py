@@ -200,24 +200,26 @@ class BinaryReader:
 
         return sep.join(parts if self.version <= 1 else reversed(parts))
 
-    def read_encoded_string(self, offset: int, sep: str = "\0") -> Optional[str]:
+    def read_encoded_string(
+        self, encoded_offset: int, sep: str = "\0"
+    ) -> Optional[str]:
         """读取编码字符串"""
-        if offset == 0xFFFFFFFF:
+        if encoded_offset == 0xFFFFFFFF or encoded_offset == 0xFFFFFFFE:
             return None
 
-        if offset in self.string_cache:
-            return self.string_cache[offset]
+        if encoded_offset in self.string_cache:
+            return self.string_cache[encoded_offset]
 
-        unicode = (offset & 0x80000000) != 0
-        dynamic_string = (offset & 0x40000000) != 0 and sep != "\0"
-        offset = offset & 0x3FFFFFFF
+        unicode = (encoded_offset & 0x80000000) != 0
+        dynamic_string = (encoded_offset & 0x40000000) != 0 and sep != "\0"
+        offset = encoded_offset & 0x3FFFFFFF
 
         if dynamic_string:
             result = self.read_dynamic_string(offset, unicode, sep)
         else:
             result = self.read_basic_string(offset, unicode)
 
-        self.string_cache[offset] = result
+        self.string_cache[encoded_offset] = result
         return result
 
     def read_offset_array(self, offset: int) -> List[int]:
@@ -271,7 +273,9 @@ class BinaryReader:
         )
 
     def read_hash128(self, offset: int) -> str:
-        """读取Hash128，返回hex字符串"""
+        """读取Hash128，返回hex字符串
+        使用小端序打包 4 个 uint32
+        """
         if offset == 0 or offset == 0xFFFFFFFF:
             return ""
 
@@ -281,13 +285,7 @@ class BinaryReader:
         v2 = self.u32
         v3 = self.u32
 
-        hash_bytes = bytearray(16)
-        hash_bytes[0:4] = v0.to_bytes(4, "big")
-        hash_bytes[4:8] = v1.to_bytes(4, "big")
-        hash_bytes[8:12] = v2.to_bytes(4, "big")
-        hash_bytes[12:16] = v3.to_bytes(4, "big")
-
-        return hash_bytes.hex()
+        return struct.pack("<IIII", v0, v1, v2, v3).hex()
 
     def read_common_info(self, offset: int) -> Optional[CommonInfo]:
         """读取CommonInfo"""
@@ -619,9 +617,6 @@ class UnityCatalogReader:
             )
 
             hash_code = hash(internal_id) * 31 + hash(provider_id)
-            hash_code = hash_code & 0xFFFFFFFF
-            if hash_code >= 0x80000000:
-                hash_code -= 0x100000000
 
             asset = AssetInfo(
                 internal_id=internal_id,
@@ -638,18 +633,21 @@ class UnityCatalogReader:
                 asset.crc = f"0x{obj_data.get('m_Crc', 0):08x}"
                 asset.hash = obj_data.get("m_Hash", "")
                 asset.data = obj_data
-                common_info_version = 1
-                if "m_ChunkedTransfer" in obj_data:
-                    if "m_AssetLoadMode" in obj_data:
-                        common_info_version = 3
-                    else:
-                        common_info_version = 2
-                redirect_limit_val = obj_data.get("m_RedirectLimit", 0)
-                redirect_limit = redirect_limit_val & 0xFF
-
+                # CommonInfo version 判断逻辑
+                if obj_data.get("m_ChunkedTransfer") is None:
+                    common_info_version = 1
+                elif (
+                    obj_data.get("m_AssetLoadMode") is None
+                    and obj_data.get("m_UseCrcForCachedBundles") is None
+                    and obj_data.get("m_UseUWRForLocalBundles") is None
+                    and obj_data.get("m_ClearOtherCachedVersionsWhenLoaded") is None
+                ):
+                    common_info_version = 2
+                else:
+                    common_info_version = 3
                 asset.common_info = CommonInfo(
                     timeout=obj_data.get("m_Timeout", 0),
-                    redirect_limit=redirect_limit,
+                    redirect_limit=obj_data.get("m_RedirectLimit", 0),
                     retry_count=obj_data.get("m_RetryCount", 0),
                     asset_load_mode=obj_data.get("m_AssetLoadMode", 0),
                     chunked_transfer=obj_data.get("m_ChunkedTransfer", False),
@@ -811,11 +809,7 @@ class UnityCatalogReader:
         provider_id = reader.read_encoded_string(provider_id_offset, ".") or ""
         resource_type = reader.read_serialized_type(type_offset)
         data = reader.decode_object(data_offset)
-
         hash_code = hash(internal_id) * 31 + hash(provider_id)
-        hash_code = hash_code & 0xFFFFFFFF
-        if hash_code >= 0x80000000:
-            hash_code -= 0x100000000
 
         asset = AssetInfo(
             internal_id=internal_id,
