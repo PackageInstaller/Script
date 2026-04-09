@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yooasset"
+version = "1.0.0"
+description = "YooAsset 资产清单解析与提取工具库"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+
+[project.scripts]
+yooasset = "yooasset.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["yooasset*"]
