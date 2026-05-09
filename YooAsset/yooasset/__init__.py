@@ -18,7 +18,7 @@ YooAsset — YooAsset 资产清单解析与提取工具库
         extract_apk_assets(Path("./unpacked_apk"), files, Path("./output"))
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # 数据模型
 from .models import (
@@ -56,6 +56,7 @@ from .constants import (
     MANIFEST_FILE_SIGN,
     BUILDIN_CATALOG_FILE_SIGN,
     SUPPORTED_VERSIONS,
+    MANIFEST_V3_FILE_VERSION,
 )
 
 __all__ = [
@@ -84,4 +85,5 @@ __all__ = [
     "MANIFEST_FILE_SIGN",
     "BUILDIN_CATALOG_FILE_SIGN",
     "SUPPORTED_VERSIONS",
+    "MANIFEST_V3_FILE_VERSION",
 ]

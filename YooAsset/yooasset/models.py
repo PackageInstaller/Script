@@ -8,7 +8,7 @@ YooAsset 数据模型
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Union
 
 
 
@@ -53,7 +53,7 @@ class PackageBundle:
 class PackageManifest:
     """资源包清单"""
 
-    file_version: str = ""
+    file_version: Union[str, int] = ""
     enable_addressable: bool = False
     support_extensionless: bool = False  # v2025.8.28+
     location_to_lower: bool = False
@@ -80,7 +80,7 @@ class BuildinCatalogFileWrapper:
 class BuildinCatalog:
     """内置文件目录"""
 
-    file_version: str = ""
+    file_version: Union[str, int] = ""
     package_name: str = ""
     package_version: str = ""
     wrappers: List[BuildinCatalogFileWrapper] = field(default_factory=list)
