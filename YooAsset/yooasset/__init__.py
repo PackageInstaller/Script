@@ -18,7 +18,7 @@ YooAsset — YooAsset 资产清单解析与提取工具库
         extract_apk_assets(Path("./unpacked_apk"), files, Path("./output"))
 """
 
-__version__ = "1.1.0"
+__version__ = "1.3.0"
 
 # 数据模型
 from .models import (

@@ -9,6 +9,8 @@ import logging
 import sys
 from pathlib import Path
 
+from .deserializer import deserialize_from_file
+from .exporter import manifest_to_json, catalogs_to_json
 from .extractor import (
     find_bytes_files,
     extract_apk_assets,
@@ -29,13 +31,77 @@ def _setup_logging(verbose: bool = False) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI
+    """CLI"""
+    if argv is None:
+        argv = sys.argv[1:]
 
-    Args:
-        argv: 命令行参数列表，默认使用 sys.argv
-    """
+    if argv and argv[0] in ("extract", "parse"):
+        cmd, rest = argv[0], argv[1:]
+    else:
+        # 旧版兼容：直接给输入目录时执行 extract
+        cmd, rest = "extract", argv
+
+    if cmd == "parse":
+        _run_parse(rest)
+    else:
+        _run_extract(rest)
+
+
+def _run_parse(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
-        prog="yooasset",
+        prog="yooasset parse",
+        description="解析 YooAsset 二进制清单（YOO 魔数）并输出解析结果",
+    )
+    parser.add_argument(
+        "manifest",
+        type=Path,
+        help="YOO 二进制清单文件（PackageManifest 或 BuildinCatalog）",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="解析结果 JSON 输出路径（默认只打印摘要）",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="显示详细调试信息",
+    )
+    args = parser.parse_args(argv)
+    _setup_logging(args.verbose)
+
+    result = deserialize_from_file(args.manifest)
+    if hasattr(result, "package_name"):
+        # PackageManifest
+        logger.info(
+            "清单: 版本 %s | 包 %s %s | 资产 %d | bundle %d",
+            result.file_version,
+            result.package_name,
+            result.package_version,
+            len(result.asset_list),
+            len(result.bundle_list),
+        )
+        if args.output:
+            manifest_to_json(result, args.output)
+    else:
+        # BuildinCatalog
+        logger.info(
+            "内置目录: 版本 %s | 包 %s %s | 文件 %d",
+            result.file_version,
+            result.package_name,
+            result.package_version,
+            len(result.wrappers),
+        )
+        if args.output:
+            catalogs_to_json({result.package_name: result}, args.output)
+
+
+def _run_extract(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(
+        prog="yooasset extract",
         description="YooAsset 资产提取工具 — 解析清单文件并还原资产目录结构",
     )
     parser.add_argument(
